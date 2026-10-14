@@ -30,14 +30,21 @@ try {
     $bitmap = [Windows.Media.Imaging.RenderTargetBitmap]::new(936, 650, 96, 96, [Windows.Media.PixelFormats]::Pbgra32)
     if ($Settings) {
         $panel = $window.FindName('SettingsPanel')
-        $panel.Measure([Windows.Size]::new(360, 650))
+        $panel.Measure([Windows.Size]::new([double]::PositiveInfinity, [double]::PositiveInfinity))
         $panel.Arrange([Windows.Rect]::new(0, 0, $panel.DesiredSize.Width, $panel.DesiredSize.Height))
         $panel.UpdateLayout()
+        $bounds = $panel.LayoutTransform.TransformBounds([Windows.Rect]::new(0, 0, $panel.ActualWidth, $panel.ActualHeight))
         $bitmap = [Windows.Media.Imaging.RenderTargetBitmap]::new(
-            [int][Math]::Ceiling($panel.ActualWidth + $panel.Margin.Left + $panel.Margin.Right),
-            [int][Math]::Ceiling($panel.ActualHeight + $panel.Margin.Top + $panel.Margin.Bottom),
+            [int][Math]::Ceiling($bounds.Width + 24), [int][Math]::Ceiling($bounds.Height + 24),
             96, 96, [Windows.Media.PixelFormats]::Pbgra32)
-        $bitmap.Render($panel)
+        $drawing = New-Object Windows.Media.DrawingVisual
+        $canvas = $drawing.RenderOpen()
+        try {
+            $canvas.DrawRectangle([Windows.Media.VisualBrush]::new($panel), $null,
+                [Windows.Rect]::new(12, 12, $bounds.Width, $bounds.Height))
+        }
+        finally { $canvas.Close() }
+        $bitmap.Render($drawing)
     }
     else { $bitmap.Render($window) }
     $encoder = New-Object Windows.Media.Imaging.PngBitmapEncoder

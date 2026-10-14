@@ -90,6 +90,9 @@
             <Popup x:Name="SettingsPopup" PlacementTarget="{Binding ElementName=Settings}" Placement="Right"
                    HorizontalOffset="10" VerticalOffset="-220" AllowsTransparency="True" StaysOpen="False">
                 <Border x:Name="SettingsPanel" Background="#FFFFFF" BorderBrush="#D6DCE3" BorderThickness="1" CornerRadius="14" Padding="20" Margin="10">
+                    <Border.LayoutTransform>
+                        <ScaleTransform ScaleX="1.2" ScaleY="1.2"/>
+                    </Border.LayoutTransform>
                     <Border.Effect><DropShadowEffect BlurRadius="12" ShadowDepth="3" Opacity="0.15"/></Border.Effect>
                     <ScrollViewer MaxHeight="560" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                         <StackPanel Width="282" Margin="0,0,4,0">
