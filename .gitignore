@@ -1,3 +1,5 @@
 __pycache__/
 *.py[cod]
 requests/
+config.json
+.config.*.tmp

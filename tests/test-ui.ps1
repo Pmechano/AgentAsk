@@ -5,6 +5,7 @@ $ErrorActionPreference = 'Stop'
 $OutputRoot = Join-Path $OutputRoot ('AgentAsk-test-' + [Guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($OutputRoot)
 $windows = @()
+$configPath = Join-Path $OutputRoot 'config.json'
 function Update-WpfEvents {
     $frame = New-Object Windows.Threading.DispatcherFrame
     $stop = { $frame.Continue = $false }.GetNewClosure()
@@ -20,6 +21,7 @@ try {
     foreach ($index in 0..2) {
         $id = [Guid]::NewGuid().ToString('N')
         $request = [pscustomobject]@{
+            config_path = $configPath
             request_id = $id; agent = "smoke-test-$index"; title = 'AgentAsk automatic test'
             question = (("Automatic test $index - closes by itself.`n") * 30)
         }
@@ -37,9 +39,16 @@ try {
     Update-WpfEvents
     if (-not $windows[0].FindName('SettingsPopup').IsOpen) { throw 'Settings did not open' }
     $windows[0].FindName('MotionToggle').IsChecked = $false
+    Invoke-TestClick $windows[0].FindName('SaveSettings')
+    if ($windows[0].FindName('SettingsError').Text) { throw $windows[0].FindName('SettingsError').Text }
     if ($windows[0].FindName('EdgeLight').HasAnimatedProperties) { throw 'Motion did not stop' }
+    Invoke-TestClick $windows[0].FindName('Settings')
     $windows[0].FindName('MotionToggle').IsChecked = $true
+    Invoke-TestClick $windows[0].FindName('SaveSettings')
+    if ($windows[0].FindName('SettingsError').Text) { throw $windows[0].FindName('SettingsError').Text }
     if (-not $windows[0].FindName('EdgeLight').HasAnimatedProperties) { throw 'Motion did not restart' }
+    Invoke-TestClick $windows[0].FindName('Settings')
+    Update-WpfEvents
     $motion = $windows[0].FindName('MotionToggle')
     $source = [Windows.PresentationSource]::FromVisual($motion)
     $escape = [Windows.Input.KeyEventArgs]::new([Windows.Input.Keyboard]::PrimaryDevice,

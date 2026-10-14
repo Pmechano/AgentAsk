@@ -5,9 +5,13 @@
 - WSL 入口：`/mnt/e/_Codex/AgentAsk/ask.py`（Windows：`E:\_Codex\AgentAsk\ask.py`）。依赖 Python 3.8+ 和 Windows PowerShell，WSL 需启用 Windows 互操作。
 - 每次传入能识别自己的 `--agent` 名称。每个问题有独立 UUID、窗口和文件，不同 agent 可以并发调用。
 - 推荐使用 `--detach`，保存 stdout JSON 中的 `request_id` 和 `response_file`。之后读取这个确切的文件；等待期间可以处理不依赖回答的工作。也可省略 `--detach` 等待完成，回答 JSON 将输出到 stdout，文件位置先输出到 stderr。
-- 只把 `status == "answered"` 的 `answer` 视为用户回答；`cancelled`、`error` 或文件不存在均不是批准或默认选择。取消后不要立即重复弹窗。
+- 只把 `status == "answered"` 的 `answer` 视为用户回答；`cancelled`、`error`、`disabled`、`timed_out` 或文件不存在均不是批准或默认选择。取消后不要立即重复弹窗。
+- `disabled` 表示用户已停用 AgentAsk：停止该提问流程，不等待、不重复调用，不自行开启配置或改用其他弹窗。按现有信息推进可独立完成的工作；真正需要用户授权的操作仍必须等待明确授权。
+- `timed_out` 的 `answer` 为 `[无回答]`，这是自动生成的超时标记，不是用户的回答或批准。不要立即重新弹窗。
+- 配置位置：`/mnt/e/_Codex/AgentAsk/config.json`（Windows：`E:\_Codex\AgentAsk\config.json`）。用户在齿轮面板保存的设置会持久化；禁用后由用户手动把 `behavior.enabled` 改回 `true` 才恢复。
+- 同步 CLI 退出码：0 已回答、1 错误、2 取消、3 禁用、4 超时。`--detach` 处理成功时返回 0；禁用时元信息带 `status: "disabled"`，回答文件已存在。
 - 问题包含复杂引号或多行文本时，先写 UTF-8 文件，用 `--question-file` 传入，避免 shell 插值。
-- `ui.log` 位于同一请求目录。后台模式无超时保证；进程被强制结束时可能没有回答，需结合任务生命周期处理。
+- `ui.log` 位于同一请求目录。可配置窗口回答超时；窗口进程被强制结束时仍可能没有回答，需结合任务生命周期处理。
 - 回答保存在工具目录下的 `requests/<request_id>/response.json`。不要用其他 agent 的文件或“最新文件”推断本次回答，不要未经用户指示清理其他请求。
 
 ```bash

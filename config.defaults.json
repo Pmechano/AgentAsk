@@ -1,0 +1,13 @@
+{
+  "appearance": {
+    "window_scale": 1.0,
+    "font_size": 16,
+    "edge_animation": true
+  },
+  "behavior": {
+    "enabled": true,
+    "topmost": false,
+    "timeout_enabled": false,
+    "timeout_seconds": 120
+  }
+}

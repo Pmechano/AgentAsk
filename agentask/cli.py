@@ -30,7 +30,8 @@ def main(argv=None):
         print(json.dumps(metadata, ensure_ascii=False), file=sys.stderr, flush=True)
         response = wait_for_response(metadata, process)
         print(json.dumps(response, ensure_ascii=False), flush=True)
-        return {"answered": 0, "cancelled": 2, "error": 1}[response["status"]]
+        return {"answered": 0, "cancelled": 2, "error": 1,
+                "disabled": 3, "timed_out": 4}[response["status"]]
     except KeyboardInterrupt:
         print("Caller interrupted; an open window may still save its response.", file=sys.stderr)
         return 130

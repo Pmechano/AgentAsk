@@ -6,6 +6,7 @@ Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 $script:AgentAskUiRoot = $PSScriptRoot
+. (Join-Path $PSScriptRoot 'settings.ps1')
 
 function Save-AgentAskResponse {
     param($State, [string]$Status, $Answer, $ErrorMessage = $null)
@@ -58,23 +59,24 @@ function New-AgentAskWindow {
     try { $window = [Windows.Markup.XamlReader]::Load($stream, $context) }
     finally { $stream.Dispose() }
     $window.Title = '{0} | {1} | {2}' -f $Request.title, $Request.agent, $Request.request_id.Substring(0, 8)
+    $configPath = Join-Path $script:AgentAskUiRoot '..\config.json'
+    if ($null -ne $Request.PSObject.Properties['config_path']) { $configPath = $Request.config_path }
+    $config = Read-AgentAskConfig $configPath
     $window.Tag = @{
         Request = $Request; ResponsePath = $ResponsePath; Saved = $false
+        ConfigPath = $configPath; Config = $null; EditSnapshot = $null
+        ConfigStamp = [IO.File]::GetLastWriteTimeUtc($configPath).Ticks
+        Clock = [Diagnostics.Stopwatch]::new(); Timer = $null
+    }
+    if (-not $config.behavior.enabled) {
+        Save-AgentAskResponse $window.Tag 'disabled' $null
+        return $window
     }
     $window.FindName('Question').Text = $Request.question
     $window.FindName('AgentName').Text = $Request.agent
     $window.FindName('AgentName').ToolTip = '{0} | {1}' -f $Request.agent, $Request.request_id
 
-    # Fit a small display without changing the hexagon or clipping its controls.
-    $work = [Windows.SystemParameters]::WorkArea
-    $scale = [Math]::Min(1, [Math]::Min(($work.Width - 24) / 936, ($work.Height - 24) / 650))
-    $window.Width = 936 * $scale
-    $window.Height = 650 * $scale
-    $offset = ([Convert]::ToInt32($Request.request_id.Substring(0, 2), 16) % 5 - 2) * 16
-    $window.Left = [Math]::Max($work.Left, [Math]::Min($work.Right - $window.Width,
-        $work.Left + ($work.Width - $window.Width) / 2 + $offset))
-    $window.Top = [Math]::Max($work.Top, [Math]::Min($work.Bottom - $window.Height,
-        $work.Top + ($work.Height - $window.Height) / 2 + $offset))
+    Apply-AgentAskConfig $window $config -Initial
 
     $window.FindName('DragHandle').Add_MouseLeftButtonDown({
         $owner = [Windows.Window]::GetWindow($this)
@@ -98,23 +100,65 @@ function New-AgentAskWindow {
     $window.FindName('Cancel').Add_Click({ [Windows.Window]::GetWindow($this).Close() })
     $window.FindName('Settings').Add_Click({
         $owner = [Windows.Window]::GetWindow($this)
-        $owner.FindName('SettingsPopup').IsOpen = -not $owner.FindName('SettingsPopup').IsOpen
+        try {
+            if ($owner.FindName('SettingsPopup').IsOpen) { $owner.FindName('SettingsPopup').IsOpen = $false }
+            else { Open-AgentAskSettings $owner }
+        }
+        catch { [void][Windows.MessageBox]::Show($owner, $_.Exception.Message, 'Cannot load settings') }
     })
-    # Popup content has a separate visual tree; Tag identifies its owning window.
-    $motion = $window.FindName('MotionToggle')
-    $motion.Tag = $window
-    $motion.IsChecked = [Windows.SystemParameters]::ClientAreaAnimation
-    $motion.Add_Checked({ Set-AgentAskMotion $this.Tag $true })
-    $motion.Add_Unchecked({ Set-AgentAskMotion $this.Tag $false })
-    $motion.Add_PreviewKeyDown({
+    # Popup content has its own visual tree. Keep explicit owner references.
+    $window.FindName('SettingsPanel').Tag = $window
+    $window.FindName('SaveSettings').Tag = $window
+    $window.FindName('SaveSettings').Add_Click({
+        $owner = $this.Tag
+        try {
+            $seconds = 0
+            if (-not [int]::TryParse($owner.FindName('TimeoutSeconds').Text, [ref]$seconds)) {
+                throw 'Wait duration must be a whole number (1-86400 seconds).'
+            }
+            $edited = [pscustomobject]@{
+                appearance = [pscustomobject]@{
+                    window_scale = $owner.FindName('WindowScale').Value / 100
+                    font_size = [int]$owner.FindName('FontSize').Value
+                    edge_animation = [bool]$owner.FindName('MotionToggle').IsChecked
+                }
+                behavior = [pscustomobject]@{
+                    enabled = [bool]$owner.FindName('EnabledToggle').IsChecked
+                    topmost = [bool]$owner.FindName('TopmostToggle').IsChecked
+                    timeout_enabled = [bool]$owner.FindName('TimeoutToggle').IsChecked
+                    timeout_seconds = $seconds
+                }
+            }
+            $saved = Save-AgentAskConfig $owner.Tag.ConfigPath $owner.Tag.EditSnapshot $edited
+            $owner.FindName('SettingsPopup').IsOpen = $false
+            if (-not $saved.behavior.enabled) {
+                Save-AgentAskResponse $owner.Tag 'disabled' $null
+                $owner.Close()
+            }
+            else {
+                Apply-AgentAskConfig $owner $saved
+                Update-AgentAskLifecycle $owner
+                [void]$owner.FindName('Answer').Focus()
+            }
+        }
+        catch { $owner.FindName('SettingsError').Text = $_.Exception.Message }
+    })
+    $window.FindName('SettingsPanel').Add_PreviewKeyDown({
         if ($_.Key -eq 'Escape') {
             $_.Handled = $true
             $this.Tag.FindName('SettingsPopup').IsOpen = $false
             [void]$this.Tag.FindName('Answer').Focus()
         }
     })
+    $timer = New-Object Windows.Threading.DispatcherTimer
+    $timer.Interval = [TimeSpan]::FromMilliseconds(250)
+    $timer.Tag = $window
+    $timer.Add_Tick({ Update-AgentAskLifecycle $this.Tag })
+    $window.Tag.Timer = $timer
     $window.Add_ContentRendered({
-        Set-AgentAskMotion $this ([bool]$this.FindName('MotionToggle').IsChecked)
+        $this.Tag.Clock.Restart()
+        $this.Tag.Timer.Start()
+        Update-AgentAskLifecycle $this
         [void]$this.FindName('Answer').Focus()
     })
     $window.Add_PreviewKeyDown({
@@ -145,7 +189,11 @@ function New-AgentAskWindow {
     $window.Add_Closed({
         $this.FindName('SettingsPopup').IsOpen = $false
         Set-AgentAskMotion $this $false
-        $this.FindName('MotionToggle').Tag = $null
+        $this.Tag.Timer.Stop()
+        $this.Tag.Timer.Tag = $null
+        $this.Tag.Clock.Stop()
+        $this.FindName('SettingsPanel').Tag = $null
+        $this.FindName('SaveSettings').Tag = $null
     })
     return $window
 }
@@ -159,7 +207,7 @@ if ($MyInvocation.InvocationName -ne '.') {
         $responsePath = Join-Path ([IO.Path]::GetDirectoryName($RequestPath)) 'response.json'
         $state = @{ Request = $request; ResponsePath = $responsePath; Saved = $false }
         $window = New-AgentAskWindow $request $responsePath
-        [void]$window.ShowDialog()
+        if (-not $window.Tag.Saved) { [void]$window.ShowDialog() }
     }
     catch {
         [Console]::Error.WriteLine($_.Exception.ToString())

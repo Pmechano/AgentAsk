@@ -16,6 +16,37 @@ class ExitedProcess:
 
 
 class ServiceTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = patch.object(service, "ROOT", Path(directory.name))
+        paths = patch.object(service, "_windows_path", side_effect=str)
+        root.start()
+        paths.start()
+        self.addCleanup(root.stop)
+        self.addCleanup(paths.stop)
+
+    def test_disabled_skips_windows_and_returns_immediately(self):
+        config = service.ROOT / "config.json"
+        config.write_text('{"behavior":{"enabled":false}}', encoding="utf-8")
+        with patch.object(service, "_launch") as launch:
+            metadata, process = service.start_question("question")
+            self.assertIsNone(process)
+            self.assertEqual("disabled", metadata["status"])
+            self.assertEqual("disabled", service.wait_for_response(metadata, process)["status"])
+            launch.assert_not_called()
+        config.write_text('{"behavior":{"enabled":true}}', encoding="utf-8")
+        with patch.object(service, "_launch", return_value=ExitedProcess()) as launch:
+            service.start_question("question again")
+            launch.assert_called_once()
+
+    def test_invalid_config_never_opens_window(self):
+        (service.ROOT / "config.json").write_text('{"behavior":{"enabled":"false"}}')
+        with patch.object(service, "_launch") as launch:
+            with self.assertRaises(ValueError):
+                service.start_question("question")
+            launch.assert_not_called()
+
     def test_concurrent_requests_keep_answers_isolated(self):
         def fake_launch(request_path, log_path):
             request = json.loads(request_path.read_text(encoding="utf-8"))

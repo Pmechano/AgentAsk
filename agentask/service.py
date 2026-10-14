@@ -8,6 +8,8 @@ import subprocess
 import uuid
 from datetime import datetime, timezone
 
+from .config import load_config
+
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -72,14 +74,17 @@ def _error_response(request, response_path, message):
         })
 
 
-def start_question(question, *, agent="unknown", title="AgentAsk", request_root=None):
+def start_question(question, *, agent="unknown", title="AgentAsk", request_root=None, config_path=None):
     """Open one independent window; return (file metadata, subprocess handle).
 
     A detached caller must inspect response.json to distinguish an answer from
     cancellation. If the UI is forcibly killed, no response may be produced.
+    When disabled, the response already exists and the process handle is None.
     """
     if not isinstance(question, str) or not question.strip():
         raise ValueError("Question must not be empty.")
+    config_path = Path(config_path or ROOT / "config.json").resolve()
+    settings = load_config(config_path)
     request_id = uuid.uuid4().hex
     directory = Path(request_root or ROOT / "requests").resolve() / request_id
     directory.mkdir(parents=True, exist_ok=False)
@@ -89,12 +94,22 @@ def start_question(question, *, agent="unknown", title="AgentAsk", request_root=
     request = {
         "schema_version": 1, "request_id": request_id, "agent": agent,
         "title": title, "question": question, "created_at": _now(),
+        "settings": settings,
     }
+    if settings["behavior"]["enabled"]:
+        request["config_path"] = _windows_path(config_path)
     _write_json(request_path, request)
     metadata = {
         "request_id": request_id, "request_file": str(request_path),
         "response_file": str(response_path), "log_file": str(log_path),
     }
+    if not settings["behavior"]["enabled"]:
+        _write_json(response_path, {
+            "schema_version": 1, "request_id": request_id, "agent": agent,
+            "status": "disabled", "answer": None, "answered_at": _now(),
+        })
+        metadata["status"] = "disabled"
+        return metadata, None
     try:
         process = _launch(request_path, log_path)
     except Exception as exc:
@@ -113,7 +128,7 @@ def read_response(response_file):
 
 
 def wait_for_response(metadata, process):
-    code = process.wait()
+    code = process.wait() if process is not None else 0
     response = read_response(metadata["response_file"])
     if response is None:
         request = json.loads(Path(metadata["request_file"]).read_text(encoding="utf-8"))
@@ -123,9 +138,9 @@ def wait_for_response(metadata, process):
     return response
 
 
-def ask(question, *, agent="unknown", title="AgentAsk", request_root=None):
+def ask(question, *, agent="unknown", title="AgentAsk", request_root=None, config_path=None):
     """Block until the user submits/cancels or the UI process exits."""
     metadata, process = start_question(
-        question, agent=agent, title=title, request_root=request_root
+        question, agent=agent, title=title, request_root=request_root, config_path=config_path
     )
     return wait_for_response(metadata, process)
