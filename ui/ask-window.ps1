@@ -2,9 +2,10 @@ param([string]$RequestPath)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-[System.Windows.Forms.Application]::EnableVisualStyles()
+Add-Type -AssemblyName PresentationFramework
+Add-Type -AssemblyName PresentationCore
+Add-Type -AssemblyName WindowsBase
+$script:AgentAskUiRoot = $PSScriptRoot
 
 function Save-AgentAskResponse {
     param($State, [string]$Status, $Answer, $ErrorMessage = $null)
@@ -31,137 +32,141 @@ function Save-AgentAskResponse {
     }
 }
 
+function Set-AgentAskMotion {
+    param($Window, [bool]$Enabled)
+    $edge = $Window.FindName('EdgeLight')
+    $edge.BeginAnimation([Windows.Shapes.Shape]::StrokeDashOffsetProperty, $null)
+    if ($Enabled) {
+        $edge.Visibility = 'Visible'
+        $animation = New-Object Windows.Media.Animation.DoubleAnimation
+        $animation.From = 0
+        $animation.To = -820
+        $animation.Duration = [Windows.Duration]::new([TimeSpan]::FromSeconds(14))
+        $animation.RepeatBehavior = [Windows.Media.Animation.RepeatBehavior]::Forever
+        [Windows.Media.Animation.Timeline]::SetDesiredFrameRate($animation, 30)
+        $edge.BeginAnimation([Windows.Shapes.Shape]::StrokeDashOffsetProperty, $animation)
+    }
+    else { $edge.Visibility = 'Collapsed' }
+}
+
 function New-AgentAskWindow {
     param($Request, [string]$ResponsePath)
-    $form = New-Object Windows.Forms.Form
-    $form.Text = '{0} | {1} | {2}' -f $Request.title, $Request.agent, $Request.request_id.Substring(0, 8)
-    $form.Size = New-Object Drawing.Size(760, 660)
-    $form.MinimumSize = New-Object Drawing.Size(620, 520)
-    $form.StartPosition = 'CenterScreen'
-    $form.Font = New-Object Drawing.Font('Segoe UI', 10)
-    $form.KeyPreview = $true
-    $form.ShowInTaskbar = $true
-    $form.Tag = @{
+    $xamlPath = Join-Path $script:AgentAskUiRoot 'window.xaml'
+    $context = New-Object Windows.Markup.ParserContext
+    $context.BaseUri = [Uri]::new($xamlPath, [UriKind]::Absolute)
+    $stream = [IO.File]::OpenRead($xamlPath)
+    try { $window = [Windows.Markup.XamlReader]::Load($stream, $context) }
+    finally { $stream.Dispose() }
+    $window.Title = '{0} | {1} | {2}' -f $Request.title, $Request.agent, $Request.request_id.Substring(0, 8)
+    $window.Tag = @{
         Request = $Request; ResponsePath = $ResponsePath; Saved = $false
     }
+    $window.FindName('Question').Text = $Request.question
+    $window.FindName('AgentName').Text = $Request.agent
+    $window.FindName('AgentName').ToolTip = '{0} | {1}' -f $Request.agent, $Request.request_id
 
-    $layout = New-Object Windows.Forms.TableLayoutPanel
-    $layout.Dock = 'Fill'
-    $layout.Padding = New-Object Windows.Forms.Padding(16)
-    $layout.ColumnCount = 1
-    $layout.RowCount = 6
-    foreach ($style in @(
-        (New-Object Windows.Forms.RowStyle('Absolute', 36)),
-        (New-Object Windows.Forms.RowStyle('Percent', 50)),
-        (New-Object Windows.Forms.RowStyle('Absolute', 32)),
-        (New-Object Windows.Forms.RowStyle('Percent', 50)),
-        (New-Object Windows.Forms.RowStyle('Absolute', 28)),
-        (New-Object Windows.Forms.RowStyle('Absolute', 44))
-    )) { [void]$layout.RowStyles.Add($style) }
+    # Fit a small display without changing the hexagon or clipping its controls.
+    $work = [Windows.SystemParameters]::WorkArea
+    $scale = [Math]::Min(1, [Math]::Min(($work.Width - 24) / 936, ($work.Height - 24) / 650))
+    $window.Width = 936 * $scale
+    $window.Height = 650 * $scale
+    $offset = ([Convert]::ToInt32($Request.request_id.Substring(0, 2), 16) % 5 - 2) * 16
+    $window.Left = [Math]::Max($work.Left, [Math]::Min($work.Right - $window.Width,
+        $work.Left + ($work.Width - $window.Width) / 2 + $offset))
+    $window.Top = [Math]::Max($work.Top, [Math]::Min($work.Bottom - $window.Height,
+        $work.Top + ($work.Height - $window.Height) / 2 + $offset))
 
-    $context = New-Object Windows.Forms.Label
-    $context.Text = 'Agent: {0}    Request: {1}' -f $Request.agent, $Request.request_id
-    $context.Dock = 'Fill'
-    $context.AutoEllipsis = $true
-    $layout.Controls.Add($context, 0, 0)
-
-    $question = New-Object Windows.Forms.TextBox
-    $question.Name = 'Question'
-    $question.Multiline = $true
-    $question.ReadOnly = $true
-    $question.ScrollBars = 'Vertical'
-    $question.Dock = 'Fill'
-    $question.TabStop = $false
-    $question.Text = $Request.question -replace "`r?`n", "`r`n"
-    $layout.Controls.Add($question, 0, 1)
-
-    $label = New-Object Windows.Forms.Label
-    $label.Text = 'Your answer:'
-    $label.Dock = 'Fill'
-    $label.TextAlign = 'MiddleLeft'
-    $layout.Controls.Add($label, 0, 2)
-
-    $answer = New-Object Windows.Forms.TextBox
-    $answer.Name = 'Answer'
-    $answer.Multiline = $true
-    $answer.AcceptsReturn = $true
-    $answer.ScrollBars = 'Vertical'
-    $answer.Dock = 'Fill'
-    $answer.MaxLength = 0
-    $layout.Controls.Add($answer, 0, 3)
-
-    $hint = New-Object Windows.Forms.Label
-    $hint.Text = 'Ctrl+Enter: submit    Esc / close: cancel'
-    $hint.Dock = 'Fill'
-    $layout.Controls.Add($hint, 0, 4)
-
-    $buttons = New-Object Windows.Forms.FlowLayoutPanel
-    $buttons.Dock = 'Fill'
-    $buttons.FlowDirection = 'RightToLeft'
-    $submit = New-Object Windows.Forms.Button
-    $submit.Name = 'Submit'
-    $submit.Text = 'Submit'
-    $submit.Size = New-Object Drawing.Size(108, 32)
-    $submit.Add_Click({
-        $window = $this.FindForm()
+    $window.FindName('DragHandle').Add_MouseLeftButtonDown({
+        $owner = [Windows.Window]::GetWindow($this)
+        if ($_.ButtonState -eq [Windows.Input.MouseButtonState]::Pressed) { $owner.DragMove() }
+    })
+    $window.FindName('Answer').Add_TextChanged({
+        $owner = [Windows.Window]::GetWindow($this)
+        $owner.FindName('Placeholder').Visibility = if ($this.Text.Length) { 'Collapsed' } else { 'Visible' }
+    })
+    $window.FindName('Submit').Add_Click({
+        $owner = [Windows.Window]::GetWindow($this)
         try {
-            $inputBox = $window.Controls.Find('Answer', $true)[0]
-            Save-AgentAskResponse $window.Tag 'answered' $inputBox.Text
-            $window.Close()
+            Save-AgentAskResponse $owner.Tag 'answered' $owner.FindName('Answer').Text
+            $owner.Close()
         }
         catch {
-            [void][Windows.Forms.MessageBox]::Show($window, $_.Exception.Message,
+            [void][Windows.MessageBox]::Show($owner, $_.Exception.Message,
                 'Could not save answer', 'OK', 'Error')
         }
     })
-    $cancel = New-Object Windows.Forms.Button
-    $cancel.Name = 'Cancel'
-    $cancel.Text = 'Cancel'
-    $cancel.Size = New-Object Drawing.Size(108, 32)
-    $cancel.Add_Click({ $this.FindForm().Close() })
-    $buttons.Controls.Add($submit)
-    $buttons.Controls.Add($cancel)
-    $form.CancelButton = $cancel
-    $layout.Controls.Add($buttons, 0, 5)
-    $form.Controls.Add($layout)
-
-    $form.Add_Shown({ [void]$this.Controls.Find('Answer', $true)[0].Focus() })
-    $form.Add_KeyDown({
-        if ($_.Control -and $_.KeyCode -eq 'Enter') {
-            $_.SuppressKeyPress = $true
-            $this.Controls.Find('Submit', $true)[0].PerformClick()
+    $window.FindName('Cancel').Add_Click({ [Windows.Window]::GetWindow($this).Close() })
+    $window.FindName('Settings').Add_Click({
+        $owner = [Windows.Window]::GetWindow($this)
+        $owner.FindName('SettingsPopup').IsOpen = -not $owner.FindName('SettingsPopup').IsOpen
+    })
+    # Popup content has a separate visual tree; Tag identifies its owning window.
+    $motion = $window.FindName('MotionToggle')
+    $motion.Tag = $window
+    $motion.IsChecked = [Windows.SystemParameters]::ClientAreaAnimation
+    $motion.Add_Checked({ Set-AgentAskMotion $this.Tag $true })
+    $motion.Add_Unchecked({ Set-AgentAskMotion $this.Tag $false })
+    $motion.Add_PreviewKeyDown({
+        if ($_.Key -eq 'Escape') {
+            $_.Handled = $true
+            $this.Tag.FindName('SettingsPopup').IsOpen = $false
+            [void]$this.Tag.FindName('Answer').Focus()
         }
     })
-    $form.Add_FormClosing({
+    $window.Add_ContentRendered({
+        Set-AgentAskMotion $this ([bool]$this.FindName('MotionToggle').IsChecked)
+        [void]$this.FindName('Answer').Focus()
+    })
+    $window.Add_PreviewKeyDown({
+        if ($_.Key -eq 'Escape') {
+            $_.Handled = $true
+            if ($this.FindName('SettingsPopup').IsOpen) {
+                $this.FindName('SettingsPopup').IsOpen = $false
+                [void]$this.FindName('Answer').Focus()
+            }
+            else { $this.Close() }
+        }
+        elseif ($_.Key -eq 'Return' -and
+                ([Windows.Input.Keyboard]::Modifiers -band [Windows.Input.ModifierKeys]::Control)) {
+            $_.Handled = $true
+            $click = New-Object Windows.RoutedEventArgs([Windows.Controls.Button]::ClickEvent)
+            $this.FindName('Submit').RaiseEvent($click)
+        }
+    })
+    $window.Add_Closing({
         $closingEvent = $_
         try { Save-AgentAskResponse $this.Tag 'cancelled' $null }
         catch {
             $closingEvent.Cancel = $true
-            [void][Windows.Forms.MessageBox]::Show($this, $_.Exception.Message,
+            [void][Windows.MessageBox]::Show($this, $_.Exception.Message,
                 'Could not save cancellation', 'OK', 'Error')
         }
     })
-    return $form
+    $window.Add_Closed({
+        $this.FindName('SettingsPopup').IsOpen = $false
+        Set-AgentAskMotion $this $false
+        $this.FindName('MotionToggle').Tag = $null
+    })
+    return $window
 }
 
-# Dot-sourcing exposes the same UI functions to the smoke test without opening a window.
+# Dot-sourcing exposes the production UI functions to the automated smoke test.
 if ($MyInvocation.InvocationName -ne '.') {
     $state = $null
-    $form = $null
+    $window = $null
     try {
         $request = [IO.File]::ReadAllText($RequestPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
         $responsePath = Join-Path ([IO.Path]::GetDirectoryName($RequestPath)) 'response.json'
         $state = @{ Request = $request; ResponsePath = $responsePath; Saved = $false }
-        $form = New-AgentAskWindow $request $responsePath
-        [void]$form.ShowDialog()
+        $window = New-AgentAskWindow $request $responsePath
+        [void]$window.ShowDialog()
     }
     catch {
         [Console]::Error.WriteLine($_.Exception.ToString())
-        if ($null -ne $form) { $state = $form.Tag }
+        if ($null -ne $window) { $state = $window.Tag }
         if ($null -ne $state -and -not $state.Saved) {
             Save-AgentAskResponse $state 'error' $null $_.Exception.Message
         }
         exit 1
     }
-    finally { if ($null -ne $form) { $form.Dispose() } }
 }

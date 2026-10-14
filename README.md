@@ -4,6 +4,14 @@
 
 安装位置：`/mnt/e/_Codex/AgentAsk`（Windows：`E:\_Codex\AgentAsk`）。要求 Python 3.8+、Windows PowerShell 5.1 和已登录的交互式 Windows 桌面。WSL 需启用 Windows 程序互操作。调用进程需要能够写入工具的 `requests` 目录并启动 `powershell.exe`；agent 自身的沙箱权限仍需允许这些操作。
 
+## 界面
+
+宽六边形 WPF 窗口采用黑色描边、浅色面板和薄荷色边缘流光。顶部显示 agent 名称，也可拖动窗口；问题可选择、复制和滚动；回答框支持多行。底部左侧“取消”、右侧“提交”，没有额外关闭图标。
+
+左侧齿轮打开外观面板，可切换当前窗口的边框流光。动画使用 WPF 原生属性动画（30 FPS 上限），默认尊重 Windows 的客户端区域动画设置；关闭窗口会停止动画。窗口尺寸会按桌面工作区缩小以适应小屏幕。
+
+布局在 `ui/window.xaml`，样式在 `ui/theme.xaml`，事件和原子文件写入在 `ui/ask-window.ps1`。此次外观升级保持 CLI、Python API、并发模型与 JSON 协议不变。
+
 ## 等待回答
 
 WSL：
@@ -19,7 +27,7 @@ Windows PowerShell（已安装 Python）：
 python E:\_Codex\AgentAsk\ask.py --agent "agent-planner" --question "这次优先处理哪个任务？"
 ```
 
-程序立即将请求 ID 和文件位置写到 stderr，等待窗口提交或取消，然后把完整回答 JSON 写到 stdout。输出和文件均为 UTF-8。Enter 在回答框中换行，Ctrl+Enter 提交；Esc、Cancel 或关闭窗口记录为取消。空回答可以提交，状态仍为 `answered`。
+程序立即将请求 ID 和文件位置写到 stderr，等待窗口提交或取消，然后把完整回答 JSON 写到 stdout。输出和文件均为 UTF-8。Enter 在回答框中换行，Ctrl+Enter 提交；底部左侧“取消”、Esc 或系统关闭操作记录为取消。设置面板打开时，Esc 先收起面板。空回答可以提交，状态仍为 `answered`。
 
 退出码：`0` 已回答；`2` 已取消；`1` 错误；`130` 调用者中断。调用者中断不保证关闭已打开的窗口，窗口仍可能写出回答。
 
@@ -94,13 +102,15 @@ result = read_response(metadata["response_file"])  # 暂无回答时返回 None
 ask.py                  # 稳定的命令行入口
 agentask/cli.py          # 参数与输出、退出码
 agentask/service.py      # 请求存储、进程启动、Python API
-ui/ask-window.ps1        # 原生 WinForms 窗口、回答落盘
+ui/ask-window.ps1        # WPF 窗口事件、动画与回答落盘
+ui/window.xaml          # 六边形布局
+ui/theme.xaml           # 颜色、按钮与输入框样式
 tests/test_service.py   # 并发隔离与故障测试
 tests/test-ui.ps1       # 自动提交/取消/关闭的真实窗口测试
 MEMORY.md               # 可复制给其他 agent 的使用约定
 ```
 
-本版未实现配置文件、总开关、置顶、超时或 UI 美化。后续可在 service 层增加配置和生命周期策略，在 UI 层独立调整布局，保持入口和 JSON 协议稳定。
+本版未实现持久化配置文件、总开关、置顶或超时。后续可在 service 层增加配置和生命周期策略，在 UI 层独立调整布局，保持入口和 JSON 协议稳定。
 
 测试（在项目根目录运行）：
 
